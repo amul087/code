@@ -13,20 +13,33 @@ NS_LOG_COMPONENT_DEFINE ("SecondScriptExample");
 
 int main (int argc, char *argv[])
 {
+  bool verbose = true;
+  uint32_t nCsma = 3;
 
-  LogComponentEnable ("UdpEchoClientApplication", LOG_LEVEL_INFO);
-  LogComponentEnable ("UdpEchoServerApplication", LOG_LEVEL_INFO);
+  CommandLine cmd;
+  cmd.AddValue ("nCsma", "Number of extra CSMA nodes", nCsma);
+  cmd.AddValue ("verbose", "Enable UDP echo logging", verbose);
+  cmd.Parse (argc, argv);
 
+  if (verbose)
+    {
+      LogComponentEnable ("UdpEchoClientApplication", LOG_LEVEL_INFO);
+      LogComponentEnable ("UdpEchoServerApplication", LOG_LEVEL_INFO);
+    }
 
+  // Ensure at least one CSMA node
+  nCsma = (nCsma == 0) ? 1 : nCsma;
+
+  // Create point-to-point nodes
   NodeContainer p2pNodes;
   p2pNodes.Create (2);
 
-
+  // Create CSMA nodes (including one P2P node)
   NodeContainer csmaNodes;
   csmaNodes.Add (p2pNodes.Get (1));
-  csmaNodes.Create (3);
+  csmaNodes.Create (nCsma);
 
-
+  // Configure point-to-point link
   PointToPointHelper pointToPoint;
   pointToPoint.SetDeviceAttribute ("DataRate", StringValue ("5Mbps"));
   pointToPoint.SetChannelAttribute ("Delay", StringValue ("2ms"));
@@ -34,7 +47,7 @@ int main (int argc, char *argv[])
   NetDeviceContainer p2pDevices;
   p2pDevices = pointToPoint.Install (p2pNodes);
 
-
+  // Configure CSMA LAN
   CsmaHelper csma;
   csma.SetChannelAttribute ("DataRate", StringValue ("100Mbps"));
   csma.SetChannelAttribute ("Delay", TimeValue (NanoSeconds (6560)));
@@ -42,10 +55,58 @@ int main (int argc, char *argv[])
   NetDeviceContainer csmaDevices;
   csmaDevices = csma.Install (csmaNodes);
 
-
+  // Install Internet stack
   InternetStackHelper stack;
   stack.Install (p2pNodes.Get (0));
   stack.Install (csmaNodes);
 
-  // Assign IP addresses to P2P network
-  Ipv4A
+  // Assign IP addresses
+  Ipv4AddressHelper address;
+
+  address.SetBase ("10.1.1.0", "255.255.255.0");
+  Ipv4InterfaceContainer p2pInterfaces;
+  p2pInterfaces = address.Assign (p2pDevices);
+
+  address.SetBase ("10.1.2.0", "255.255.255.0");
+  Ipv4InterfaceContainer csmaInterfaces;
+  csmaInterfaces = address.Assign (csmaDevices);
+
+  // UDP Echo Server
+  UdpEchoServerHelper echoServer (9);
+  ApplicationContainer serverApps =
+      echoServer.Install (csmaNodes.Get (nCsma));
+  serverApps.Start (Seconds (1.0));
+  serverApps.Stop (Seconds (10.0));
+
+  // UDP Echo Client
+  UdpEchoClientHelper echoClient (csmaInterfaces.GetAddress (nCsma), 9);
+  echoClient.SetAttribute ("MaxPackets", UintegerValue (3));
+  echoClient.SetAttribute ("Interval", TimeValue (Seconds (1.0)));
+  echoClient.SetAttribute ("PacketSize", UintegerValue (1024));
+
+  ApplicationContainer clientApps =
+      echoClient.Install (p2pNodes.Get (0));
+  clientApps.Start (Seconds (2.0));
+  clientApps.Stop (Seconds (10.0));
+
+  Ipv4GlobalRoutingHelper::PopulateRoutingTables ();
+
+  
+  pointToPoint.EnablePcapAll ("p2p");
+  csma.EnablePcap ("csma1", csmaDevices.Get (1), true);
+  csma.EnablePcap ("csma2", csmaDevices.Get (2), true);
+  csma.EnablePcap ("csma3", csmaDevices.Get (3), true);
+
+  
+  AnimationInterface anim ("bus.xml");
+  anim.SetConstantPosition (p2pNodes.Get (0), 10.0, 10.0);
+  anim.SetConstantPosition (csmaNodes.Get (0), 20.0, 20.0);
+  anim.SetConstantPosition (csmaNodes.Get (1), 30.0, 30.0);
+  anim.SetConstantPosition (csmaNodes.Get (2), 40.0, 40.0);
+  anim.SetConstantPosition (csmaNodes.Get (3), 50.0, 50.0);
+
+  Simulator::Run ();
+  Simulator::Destroy ();
+
+  return 0;
+}
